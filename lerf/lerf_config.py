@@ -142,8 +142,8 @@ lerf_method_lite = MethodSpecification(
             ),
             model=LERFModelConfig(
                 eval_num_rays_per_chunk=1 << 15,
-                hashgrid_sizes=(19,),
-                hashgrid_layers=(16,),
+                hashgrid_sizes=(19,19),
+                hashgrid_layers=(16,16),
                 hashgrid_resolutions=((16, 512),),
                 num_lerf_samples=12,
             ),

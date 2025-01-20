@@ -18,6 +18,7 @@ from nerfstudio.field_components.spatial_distortions import (
     SpatialDistortion,
 )
 from nerfstudio.fields.base_field import Field
+#from torchtyping import TensorType
 
 try:
     import tinycudann as tcnn
@@ -122,6 +123,7 @@ class LERFField(Field):
         # Apply hash grid encodings for each level, and concatenate results.
         xs = [e(positions.view(-1, 3)) for e in self.clip_encs]
         x = torch.concat(xs, dim=-1)
+        hash = x.view(*ray_samples.frustums.shape, -1) # Added by myself
 
         # Store hash grid features in the outputs dictionary
         outputs[LERFFieldHeadNames.HASHGRID] = x.view(*ray_samples.frustums.shape, -1)
@@ -136,8 +138,33 @@ class LERFField(Field):
         dino_pass = self.dino_net(x).view(*ray_samples.frustums.shape, -1)
         outputs[LERFFieldHeadNames.DINO] = dino_pass
 
-        return outputs # Return CLIP-DINO Outputs
-
+        return outputs#, hash # Return CLIP-DINO Outputs # return hash added by myself
+    
+    # Method added by myself
+#    def get_mlp(self, hash: TensorType, instance_scales: TensorType) -> TensorType:
+#        """
+#        Get the GARField affinity field outputs. Note that this is scale-conditioned.
+#        This function *does* assume that the hash values are normalized.
+#        The MLP output is normalized to unit length.
+#        """
+#        assert self.quantile_transformer is not None
+#
+#        # Check that # of rays is the same as # of scales
+#        assert hash.shape[0] == instance_scales.shape[0]
+#
+#        epsilon = 1e-5
+#        if self.use_single_scale:
+#            instance_pass = self.instance_net(hash)
+#            return instance_pass / (instance_pass.norm(dim=-1, keepdim=True) + epsilon)
+#
+#        scales = instance_scales.contiguous().view(-1, 1)
+#
+#        # Normalize scales before passing to MLP
+#        scales = self.quantile_transformer(scales)
+#        instance_pass = self.instance_net(torch.cat([hash, scales], dim=-1))
+#
+#        norms = instance_pass.norm(dim=-1, keepdim=True)
+#        return instance_pass / (norms + epsilon)
 
     # Method computes CLIP outputs for a given hashgrid encoding and specific scale.
     def get_output_from_hashgrid(self, ray_samples: RaySamples, hashgrid_field, scale):

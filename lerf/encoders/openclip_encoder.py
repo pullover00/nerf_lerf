@@ -3,6 +3,8 @@ from typing import Tuple, Type
 
 import torch
 import torchvision
+#import open3d as o3d
+#from nerfstudio.scripts.exporter import ExportPointCloud
 
 try:
     import open_clip
@@ -11,8 +13,21 @@ except ImportError:
 
 from lerf.encoders.image_encoder import (BaseImageEncoder,
                                          BaseImageEncoderConfig)
-from nerfstudio.viewer.viewer_elements import ViewerText
 
+from nerfstudio.viewer.viewer_elements import *
+# Import for own methods
+from nerfstudio.exporter.exporter_utils import collect_camera_poses, generate_point_cloud, get_mesh_from_filename
+#from nerfstudio.utils.eval_utils import eval_setup
+
+#from nerfstudio.scripts.exporter import ExportPointCloud
+from pathlib import Path
+
+from nerfstudio.pipelines.base_pipeline import VanillaPipeline, Pipeline
+from nerfstudio.data.datamanagers.base_datamanager import DataManager, DataManagerConfig, VanillaDataManager
+from lerf.data.lerf_datamanager import (
+    LERFDataManager,
+    LERFDataManagerConfig
+)
 
 @dataclass
 class OpenCLIPNetworkConfig(BaseImageEncoderConfig):
@@ -21,7 +36,6 @@ class OpenCLIPNetworkConfig(BaseImageEncoderConfig):
     clip_model_pretrained: str = "laion2b_s34b_b88k"
     clip_n_dims: int = 512
     negatives: Tuple[str] = ("object", "things", "stuff", "texture")
-
 
 class OpenCLIPNetwork(BaseImageEncoder):
     def __init__(self, config: OpenCLIPNetworkConfig):
@@ -46,7 +60,9 @@ class OpenCLIPNetwork(BaseImageEncoder):
         self.model = model.to("cuda")
         self.clip_n_dims = self.config.clip_n_dims
 
+        # gui_cb:
         self.positive_input = ViewerText("LERF Positives", "", cb_hook=self.gui_cb)
+        self.export_point_cloud_button = ViewerButton("Export Point Cloud", cb_hook=self.export_point_cloud)
 
         self.positives = self.positive_input.value.split(";")
         self.negatives = self.config.negatives
@@ -76,6 +92,103 @@ class OpenCLIPNetwork(BaseImageEncoder):
     def gui_cb(self,element):
         self.set_positives(element.value.split(";"))
 
+    def export_point_cloud(self, element):
+        """Callback function to export the point cloud for the positive relevancy map."""
+        from nerfstudio.scripts.exporter import ExportPointCloud
+        try:
+            # Define parameters
+            num_points = 1000000  # Number of points to generate
+            remove_outliers = True
+            reorient_normals = False
+            normal_method = "open3d"
+            rgb_output_name = "rgb"
+            depth_output_name = "depth"
+            normal_output_name = "normals"
+            bounding_box =  (0.0, 0.0, 0.0)
+            #config_path = Path('pointcloud/point_cloud.pcd')
+            config_path = Path('outputs/figurines/lerf/2025-01-16_103610/config.yml')
+            #print(config_path)
+            output_dir = Path('exports/pcd/')   # Define the output directory
+
+            # Create an instance of ExportPointCloud with desired parameters
+            exporter = ExportPointCloud(
+                load_config = config_path,
+               # load_config=self.load_config,  # Ensure this points to your YAML config
+                output_dir = output_dir,
+                num_points = num_points,
+                remove_outliers = remove_outliers,
+                reorient_normals = reorient_normals,
+                normal_method = None, #normal_method,
+                normal_output_name = normal_output_name,
+                depth_output_name = depth_output_name,
+                rgb_output_name = rgb_output_name,
+                obb_center = bounding_box,
+                obb_rotation = bounding_box,
+                obb_scale = bounding_box,
+            )
+
+            # Call the main export method
+            exporter.main()
+
+            print(f"Point cloud successfully exported to {output_dir / 'point_cloud.ply'}")
+        except Exception as e:
+            print(f"Error exporting point cloud: {e}")
+#
+#        
+#    def export_object(self, element):
+#        """Callback function to export the point cloud for the positive relevancy map using generate_point_cloud."""
+#        from nerfstudio.exporter.exporter_utils import generate_point_cloud
+#
+#        # Define parameters (these can be adjusted as needed for your scenario)
+#        num_points = 1000000  # Number of points to generate
+#        remove_outliers = True
+#        reorient_normals = False
+#        normal_method = "open3d"
+#        rgb_output_name = "rgb"
+#        depth_output_name = "depth"
+#        normal_output_name = "normals"
+#        
+#        # Define the path to the configuration file
+#        config_path = Path('scene04/outputs/output/lerf/2025-01-09_134140/config.yml')
+#        
+#        # Define the output directory for the exported point cloud
+#        output_dir = Path('exports/pcd/')
+#        
+#        # Ensure the output directory exists
+#        if not output_dir.exists():
+#            output_dir.mkdir(parents=True)
+#
+#        # Set up the pipeline and other necessary components
+#        #_, pipeline, _, _ = eval_setup(config_path)
+#        
+#        # Whether the normals should be estimated based on the point cloud
+#        estimate_normals = normal_method == "open3d"
+#
+#        # Generate the point cloud
+#        pcd = generate_point_cloud(
+#            pipeline=pipeline,
+#            num_points=num_points,
+#            remove_outliers=remove_outliers,
+#            reorient_normals=reorient_normals,
+#            estimate_normals=estimate_normals,
+#            rgb_output_name=rgb_output_name,
+#            depth_output_name=depth_output_name,
+#            normal_output_name=normal_output_name if normal_method == "model_output" else None,
+#            crop_obb=None,  # Oriented Bounding Box (if applicable)
+#            std_ratio=10.0,  # Threshold for outlier removal
+#        )
+#
+#        # Save the point cloud to a file
+#        #output_file = output_dir / 'point_cloud.ply'
+        #o3d.io.write_point_cloud(str(output_file), pcd)
+
+        #print(f"Point cloud successfully exported to {output_file}")
+
+        #except Exception as e:
+        #print(f"Error exporting point cloud: {e}")
+
+    
+
     def set_positives(self, text_list):
         self.positives = text_list
         with torch.no_grad():
@@ -101,3 +214,7 @@ class OpenCLIPNetwork(BaseImageEncoder):
     def encode_image(self, input):
         processed_input = self.process(input).half()
         return self.model.encode_image(processed_input)
+    
+       
+
+

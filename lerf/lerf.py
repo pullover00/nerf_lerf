@@ -32,9 +32,9 @@ class LERFModelConfig(NerfactoModelConfig):
     """maximum scale used to compute relevancy with"""
     num_lerf_samples: int = 24
     # Stuff for spatial data. Hashgrid is like a voxel grid (3 lines below changed by myself)
-    hashgrid_layers: Tuple[int, int] = (12, 12)
-    hashgrid_resolutions:  Tuple[Tuple[int, int], Tuple[int, int]] = ((16, 128), (128, 512))
-    hashgrid_sizes: Tuple[int, int] = (19, 19)
+    hashgrid_layers: Tuple[float, float] = (12, 12)
+    hashgrid_resolutions: Tuple[Tuple[float, float]] = ((16, 128), (128, 512))
+    hashgrid_sizes: Tuple[float, float] = (19, 19)
 
 # Extending Nerfacto Model
 class LERFModel(NerfactoModel):
@@ -154,6 +154,7 @@ class LERFModel(NerfactoModel):
 
         # Compute LERF field outputs including DINO and CLIP embeddings
         lerf_field_outputs = self.lerf_field.get_outputs(lerf_samples, clip_scales)
+        #print(type(lerf_field_outputs), lerf_field_outputs)
         outputs["clip"] = self.renderer_clip(
             embeds=lerf_field_outputs[LERFFieldHeadNames.CLIP], weights=lerf_weights.detach()
         )
@@ -262,18 +263,21 @@ class LERFModel(NerfactoModel):
         #return outputs
 
     def _get_outputs_nerfacto(self, ray_samples: RaySamples):
-        field_outputs = self.field(ray_samples, compute_normals=self.config.predict_normals)
+        normals = self.config.predict_normals
+        field_outputs = self.field(ray_samples, normals)
         weights = ray_samples.get_weights(field_outputs[FieldHeadNames.DENSITY])
 
         # Render RGB, depth, and accumulation from the field outputs
         rgb = self.renderer_rgb(rgb=field_outputs[FieldHeadNames.RGB], weights=weights)
         depth = self.renderer_depth(weights=weights, ray_samples=ray_samples)
         accumulation = self.renderer_accumulation(weights=weights)
+        normals = self.config.predict_normals
 
         outputs = {
             "rgb": rgb,
             "accumulation": accumulation,
             "depth": depth,
+            "normals": normals
         }
 
         return field_outputs, outputs, weights
@@ -293,3 +297,5 @@ class LERFModel(NerfactoModel):
         param_groups = super().get_param_groups()
         param_groups["lerf"] = list(self.lerf_field.parameters())
         return param_groups
+    
+
