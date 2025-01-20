@@ -20,7 +20,6 @@ from lerf.data.lerf_datamanager import (
 from lerf.lerf import LERFModel, LERFModelConfig
 from lerf.encoders.image_encoder import BaseImageEncoderConfig, BaseImageEncoder
 
-
 @dataclass
 class LERFPipelineConfig(VanillaPipelineConfig):
     """Configuration for pipeline instantiation"""
@@ -33,7 +32,6 @@ class LERFPipelineConfig(VanillaPipelineConfig):
     """specifies the model config"""
     network: BaseImageEncoderConfig = BaseImageEncoderConfig()
     """specifies the vision-language network config"""
-
 
 class LERFPipeline(VanillaPipeline):
     def __init__(
@@ -60,7 +58,6 @@ class LERFPipeline(VanillaPipeline):
         )
         self.datamanager.to(device)
 
-        # TODO(ethan): get rid of scene_bounds from the model
         assert self.datamanager.train_dataset is not None, "Missing input dataset"
 
         self._model = config.model.setup(
