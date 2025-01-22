@@ -62,7 +62,7 @@ class OpenCLIPNetwork(BaseImageEncoder):
 
         # gui_cb:
         self.positive_input = ViewerText("LERF Positives", "", cb_hook=self.gui_cb)
-        self.export_point_cloud_button = ViewerButton("Export Point Cloud", cb_hook=self.export_point_cloud)
+        #self.export_point_cloud_button = ViewerButton("Export Point Cloud", cb_hook=self.export_point_cloud)
 
         self.positives = self.positive_input.value.split(";")
         self.negatives = self.config.negatives
@@ -92,48 +92,6 @@ class OpenCLIPNetwork(BaseImageEncoder):
     def gui_cb(self,element):
         self.set_positives(element.value.split(";"))
 
-    def export_point_cloud(self, element):
-        """Callback function to export the point cloud for the positive relevancy map."""
-        from nerfstudio.scripts.exporter import ExportPointCloud
-        try:
-            # Define parameters
-            num_points = 1000000  # Number of points to generate
-            remove_outliers = True
-            reorient_normals = False
-            normal_method = "open3d"
-            rgb_output_name = "rgb"
-            depth_output_name = "depth"
-            normal_output_name = "normals"
-            bounding_box =  (0.0, 0.0, 0.0)
-            #config_path = Path('pointcloud/point_cloud.pcd')
-            config_path = Path('outputs/figurines/lerf/2025-01-16_103610/config.yml')
-            #print(config_path)
-            output_dir = Path('exports/pcd/')   # Define the output directory
-
-            # Create an instance of ExportPointCloud with desired parameters
-            exporter = ExportPointCloud(
-                load_config = config_path,
-               # load_config=self.load_config,  # Ensure this points to your YAML config
-                output_dir = output_dir,
-                num_points = num_points,
-                remove_outliers = remove_outliers,
-                reorient_normals = reorient_normals,
-                normal_method = None, #normal_method,
-                normal_output_name = normal_output_name,
-                depth_output_name = depth_output_name,
-                rgb_output_name = rgb_output_name,
-                obb_center = bounding_box,
-                obb_rotation = bounding_box,
-                obb_scale = bounding_box,
-            )
-
-            # Call the main export method
-            exporter.main()
-
-            print(f"Point cloud successfully exported to {output_dir / 'point_cloud.ply'}")
-        except Exception as e:
-            print(f"Error exporting point cloud: {e}")
-#
 #        
 #    def export_object(self, element):
 #        """Callback function to export the point cloud for the positive relevancy map using generate_point_cloud."""

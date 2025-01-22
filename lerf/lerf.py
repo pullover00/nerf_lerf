@@ -57,12 +57,12 @@ class LERFModel(NerfactoModel):
             clip_n_dims=self.image_encoder.embedding_dim,
         )
 
-       # # Added from Garfield
-       # self.click_scene: LERFClickScene = LERFClickScene(
-       #     device=("cuda" if torch.cuda.is_available() else "cpu"),
-       #     scale_handle=self.scale_slider,
-       #     model_handle=[self]
-       # )
+        from lerf.interaction import LERFInteraction
+        self.click_scene: LERFInteraction = LERFInteraction(
+            device=("cuda" if torch.cuda.is_available() else "cpu"),
+            #scale_handle=self.scale_slider,
+            model_handle=[self]
+            )
         
      # Compute the maximum relevancy across scales for each query phrase
     def get_max_across(self, ray_samples, weights, hashgrid_field, scales_shape, preset_scales=None):
