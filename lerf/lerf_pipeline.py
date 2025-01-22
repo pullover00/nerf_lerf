@@ -103,10 +103,6 @@ class LERFPipeline(VanillaPipeline):
         """
         hide_in_interactive = (not (dropdown.value == "Interactive")) # # Hide elements in interactive mode
 
-        self.cluster_scene.set_hidden((not hide_in_interactive))
-        self.cluster_scene_scale.set_hidden((not hide_in_interactive))
-        self.cluster_scene_shuffle_colors.set_hidden((not hide_in_interactive))
-
         self._click_nerf.set_hidden(hide_in_interactive) # adjusted
         self.crop_to_click.set_hidden(hide_in_interactive)
         self.crop_to_group_level.set_hidden(hide_in_interactive)

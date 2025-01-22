@@ -43,11 +43,11 @@ class LERFInteraction(nn.Module):
         """
         super().__init__()
         self.add_click_button: ViewerButton = ViewerButton(
-            name="Export Pointcloud", cb_hook=self._export_point_cloud
+            name="Click", cb_hook=self._add_click_cb
         )
-        #self.del_click_button: ViewerButton = ViewerButton(
-        #    name="Reset Click", cb_hook=self._del_click_cb
-        #)
+        self.del_click_button: ViewerButton = ViewerButton(
+            name="Reset Click", cb_hook=self._del_click_cb
+        )
         self.viewer_control: ViewerControl = ViewerControl()
 
         # Store references to slider and model
