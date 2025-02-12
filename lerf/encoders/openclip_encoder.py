@@ -3,8 +3,6 @@ from typing import Tuple, Type
 
 import torch
 import torchvision
-#import open3d as o3d
-#from nerfstudio.scripts.exporter import ExportPointCloud
 
 try:
     import open_clip
@@ -41,6 +39,8 @@ class OpenCLIPNetwork(BaseImageEncoder):
     def __init__(self, config: OpenCLIPNetworkConfig):
         super().__init__()
         self.config = config
+
+        # Define image preprocessing transformations
         self.process = torchvision.transforms.Compose(
             [
                 torchvision.transforms.Resize((224, 224)),
@@ -50,6 +50,8 @@ class OpenCLIPNetwork(BaseImageEncoder):
                 ),
             ]
         )
+
+        # Load CLIP model
         model, _, _ = open_clip.create_model_and_transforms(
             self.config.clip_model_type,  # e.g., ViT-B-16
             pretrained=self.config.clip_model_pretrained,  # e.g., laion2b_s34b_b88k
@@ -60,20 +62,25 @@ class OpenCLIPNetwork(BaseImageEncoder):
         self.model = model.to("cuda")
         self.clip_n_dims = self.config.clip_n_dims
 
-        # gui_cb:
+        # Viewer UI elements
         self.positive_input = ViewerText("LERF Positives", "", cb_hook=self.gui_cb)
-        #self.export_point_cloud_button = ViewerButton("Export Point Cloud", cb_hook=self.export_point_cloud)
-
+        
+        # Initialize positive and negative embeddings
         self.positives = self.positive_input.value.split(";")
         self.negatives = self.config.negatives
+
+        # Compute text embeddings for positive and negative phrases
         with torch.no_grad():
             tok_phrases = torch.cat([self.tokenizer(phrase) for phrase in self.positives]).to("cuda")
             self.pos_embeds = model.encode_text(tok_phrases)
             tok_phrases = torch.cat([self.tokenizer(phrase) for phrase in self.negatives]).to("cuda")
             self.neg_embeds = model.encode_text(tok_phrases)
+
+        # Normalize embeddings
         self.pos_embeds /= self.pos_embeds.norm(dim=-1, keepdim=True)
         self.neg_embeds /= self.neg_embeds.norm(dim=-1, keepdim=True)
 
+        # Ensure consistency of embedding dimensions
         assert (
             self.pos_embeds.shape[1] == self.neg_embeds.shape[1]
         ), "Positive and negative embeddings must have the same dimensionality"
@@ -83,13 +90,17 @@ class OpenCLIPNetwork(BaseImageEncoder):
 
     @property
     def name(self) -> str:
+        """Returns a name identifier for the CLIP model."""
         return "openclip_{}_{}".format(self.config.clip_model_type, self.config.clip_model_pretrained)
 
     @property
     def embedding_dim(self) -> int:
+        """Returns the number of embedding dimensions."""
         return self.config.clip_n_dims
     
     def gui_cb(self,element):
+        """Callback function for GUI input."""
+        # Split input words with comma and input to set_positives
         self.set_positives(element.value.split(";"))
 
 #        
@@ -145,31 +156,76 @@ class OpenCLIPNetwork(BaseImageEncoder):
         #except Exception as e:
         #print(f"Error exporting point cloud: {e}")
 
-    
-
     def set_positives(self, text_list):
+        """Updates the list of positive phrases and re-computes their embeddings.
+        
+        Args:
+            text_list (list of str): A list of positive phrases to be embedded.
+
+        Returns:
+            Abstract matrix as an output (matrix of puppy is more similar to dog than to table)
+        """
+        # Store the input positive phrases
         self.positives = text_list
-        with torch.no_grad():
+        
+        with torch.no_grad():   # Disable gradient computation for efficiency
+             # Tokenize and encode each phrase in the positive list and move to cuda
             tok_phrases = torch.cat([self.tokenizer(phrase) for phrase in self.positives]).to("cuda")
+
+            # Pass tokenized phrases through the model to get text embeddings
             self.pos_embeds = self.model.encode_text(tok_phrases)
+
+        # Normalize embeddings to unit vectors
         self.pos_embeds /= self.pos_embeds.norm(dim=-1, keepdim=True)
 
     def get_relevancy(self, embed: torch.Tensor, positive_id: int) -> torch.Tensor:
+        """Computes the relevancy score of a given embedding against positive and negative embeddings.
+        
+        Args:
+            embed (torch.Tensor): The input embedding tensor representing the features of interest.
+            positive_id (int): The index of the positive phrase to compare against.
+        
+        Returns:
+            torch.Tensor: Softmax-normalized relevancy scores.
+            tensor([[0.4470, 0.5530],   -->  [probability that the positive phrase,  probability that the negative phrase is more relevant.]
+                    [0.4419, 0.5581], 
+                    ...])
+        """
+        # Combine positive and negative embeddings for comparison
         phrases_embeds = torch.cat([self.pos_embeds, self.neg_embeds], dim=0)
-        p = phrases_embeds.to(embed.dtype)  # phrases x 512
-        output = torch.mm(embed, p.T)  # rays x phrases
-        positive_vals = output[..., positive_id : positive_id + 1]  # rays x 1
-        negative_vals = output[..., len(self.positives) :]  # rays x N_phrase
+        p = phrases_embeds.to(embed.dtype)  # Convert to match the dtype of input embeddings # phrases x 512
+
+        # Compute cosine similarity between input embeddings and phrase embeddings
+        output = torch.mm(embed, p.T)  # Matrix multiplication: [rays x phrases]
+
+        # Extract similarity values for the selected positive phrase
+        positive_vals = output[..., positive_id : positive_id + 1]  # Shape: [rays x 1]
+
+        # Extract similarity values for all negative phrases
+        negative_vals = output[..., len(self.positives) :]  # Shape: [rays x N_negatives]
+
+        # Repeat positive scores to match the shape of negative scores
         repeated_pos = positive_vals.repeat(1, len(self.negatives))  # rays x N_phrase
 
+        # Stack positive and negative similarity scores for softmax computation
         sims = torch.stack((repeated_pos, negative_vals), dim=-1)  # rays x N-phrase x 2
+
+        # Apply softmax to obtain normalized relevancy scores
         softmax = torch.softmax(10 * sims, dim=-1)  # rays x n-phrase x 2
+
+        # Identify the least relevant negative phrase for each ray
         best_id = softmax[..., 0].argmin(dim=1)  # rays x 2
-        return torch.gather(softmax, 1, best_id[..., None, None].expand(best_id.shape[0], len(self.negatives), 2))[
+
+        relevancy = (torch.gather(softmax, 1, best_id[..., None, None].expand(best_id.shape[0], len(self.negatives), 2))[
             :, 0, :
         ]
+        )
+
+        # Select the corresponding relevancy scores
+        return relevancy
 
     def encode_image(self, input):
+        """Encodes an image into CLIP's embedding space"""
         processed_input = self.process(input).half()
         return self.model.encode_image(processed_input)
     

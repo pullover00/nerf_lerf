@@ -1,4 +1,3 @@
-"""Helper functions for interacting/visualization with GARField model."""
 from typing import List, Optional, Tuple, Union
 import viser
 import trimesh
@@ -14,9 +13,8 @@ from nerfstudio.model_components.losses import scale_gradients_by_distance_squar
 from nerfstudio.viewer.viewer_elements import *
 from nerfstudio.viewer.viewer import VISER_NERFSTUDIO_SCALE_RATIO
 
-#from nerfstudio.scripts.exporter import ExportPointCloud
-
 from lerf.lerf import LERFModel
+
 
 class LERFInteraction(nn.Module):
     """UI for clicking on a scene (visualized as spheres).
@@ -29,11 +27,10 @@ class LERFInteraction(nn.Module):
     model_handle: List[LERFModel]  # Store as list to avoid circular children
 
     def __init__(
-            self,
-            device: torch.device,
-            #scale_handle: ViewerSlider,
-            model_handle: List[LERFModel]
-        ):
+        self,
+        device: torch.device,
+        model_handle: List[LERFModel],
+    ):
         """
         Initializes the Export UI component.
 
@@ -42,18 +39,24 @@ class LERFInteraction(nn.Module):
             model_handle: A list containing references to the GARField model.
         """
         super().__init__()
+
+        # UI Components
         self.add_click_button: ViewerButton = ViewerButton(
             name="Click", cb_hook=self._add_click_cb
         )
         self.del_click_button: ViewerButton = ViewerButton(
             name="Reset Click", cb_hook=self._del_click_cb
         )
+
+        # New button for showing the highest relevancy position
+        self.show_max_relevancy_button: ViewerButton = ViewerButton(
+        name="Show Max Relevancy", cb_hook=self._show_max_relevancy_cb
+        )
+
         self.viewer_control: ViewerControl = ViewerControl()
 
-        # Store references to slider and model
-        #self.scale_handle = scale_handle
+        # Store references to and model
         self.model_handle = model_handle
-        #self.scale_handle.cb_hook = self._update_scale_vis
 
         # Initialize handles and variables
         self._click_handle = None
@@ -62,57 +65,46 @@ class LERFInteraction(nn.Module):
         self.device = device
 
         # Initialize exporting infos
-        self.z_export_options_camera_path_filename = ViewerText("Camera Path Filename", "", visible=False)
+        #self.z_export_options_camera_path_filename = ViewerText("Camera Path Filename", "", visible=False)
         #self.z_export_options_camera_path_render = ViewerButton("Render Current Pipeline", cb_hook=self.render_from_path, visible=False)
+
+    def _show_max_relevancy_cb(self, button: ViewerButton):
+        """
+        Callback for showing the highest relevancy position with a sphere.
+        """
+        model = self.model_handle[0]  # Get the LERF model instance
+    
+        # Get outputs from the latest model run
+        outputs = model.get_outputs_for_camera_ray_bundle(model.camera_ray_bundle)
+    
+        if "highest_relevancy_position" not in outputs:
+            print("Error: No highest relevancy position found in outputs.")
+            return
+    
+        # Extract the highest relevancy position
+        highest_relevancy_position = outputs["highest_relevancy_position"].cpu().numpy()
+    
+        # Remove any existing sphere
+        self._del_click_cb(None)
+    
+        # Create a sphere at the highest relevancy position
+        sphere_mesh: trimesh.Trimesh = trimesh.creation.icosphere(radius=0.1)
+        sphere_mesh.vertices += highest_relevancy_position
+        sphere_mesh.visual.vertex_colors = (1.0, 0.0, 0.0, 5.0)  # Red sphere
+    
+        # Add to the viewer
+        sphere_mesh_handle = self.viewer_control.viser_server.add_mesh_trimesh(
+            name=f"/max_relevancy_pos", mesh=sphere_mesh
+        )
+        
+        self._click_handle = sphere_mesh_handle
+        self.selected_location = highest_relevancy_position
 
 
     def _update_export_options(self, checkbox: ViewerCheckbox):
         """Update the UI based on the export options"""
         self.z_export_options_camera_path_filename.set_hidden(not checkbox.value)
         self.z_export_options_camera_path_render.set_hidden(not checkbox.value)
-
-    def _export_point_cloud(self, element):
-        """
-        Callback function to export the point cloud of the whole scene.
-        """
-        try:
-            # Define parameters
-            num_points = 1000000  # Number of points to generate
-            remove_outliers = True
-            reorient_normals = False
-            normal_method = "open3d"
-            rgb_output_name = "rgb"
-            depth_output_name = "depth"
-            normal_output_name = "normals"
-            bounding_box =  (0.0, 0.0, 0.0)
-            #config_path = Path('pointcloud/point_cloud.pcd')
-            config_path = Path('outputs/figurines/lerf/2025-01-16_103610/config.yml')
-            #print(config_path)
-            output_dir = Path('exports/pcd/')   # Define the output directory
-
-            # Create an instance of ExportPointCloud with desired parameters
-            exporter = ExportPointCloud(
-                load_config = config_path,
-               # load_config=self.load_config,  # Ensure this points to your YAML config
-                output_dir = output_dir,
-                num_points = num_points,
-                remove_outliers = remove_outliers,
-                reorient_normals = reorient_normals,
-                normal_method = None, #normal_method,
-                normal_output_name = normal_output_name,
-                depth_output_name = depth_output_name,
-                rgb_output_name = rgb_output_name,
-                obb_center = bounding_box,
-                obb_rotation = bounding_box,
-                obb_scale = bounding_box,
-            )
-
-            # Call the main export method
-            exporter.main()
-
-            print(f"Point cloud successfully exported to {output_dir / 'point_cloud.ply'}")
-        except Exception as e:
-            print(f"Error exporting point cloud: {e}")
 
     def _add_click_cb(self, button: ViewerButton):
         """
@@ -166,12 +158,13 @@ class LERFInteraction(nn.Module):
         self._del_click_cb(None) # Remove previous visualizations
         sphere_mesh: trimesh.Trimesh = trimesh.creation.icosphere(radius=0.1)
         sphere_mesh.vertices += click_position
-        sphere_mesh.visual.vertex_colors = (1.0, 0.0, 0.0, 1.0)  # type: ignore
+        sphere_mesh.visual.vertex_colors = (1.0, 0.0, 0.0, 5.0)  # type: ignore
         sphere_mesh_handle = self.viewer_control.viser_server.add_mesh_trimesh(
             name=f"/hit_pos", mesh=sphere_mesh
         )
         self._click_handle = sphere_mesh_handle
         self.selected_location = np.array(origin + direction * distance)
+        # Later! Substitute the selected_location with something else. 
         #self._update_scale_vis(self.scale_handle)
 
     def _del_click_cb(self, button: ViewerButton):
@@ -186,24 +179,6 @@ class LERFInteraction(nn.Module):
         self._box_handle = None
         self.selected_location = None
 
-    def _update_scale_vis(self, slider: ViewerSlider):
-        """
-        Update the scale visualization.
-        """
-        if self._box_handle is not None:
-            self._box_handle.remove()
-            self._box_handle = None
-        if self.selected_location is not None:
-            # Create a wireframe box representing the scale
-            box_mesh = trimesh.creation.icosphere(radius=VISER_NERFSTUDIO_SCALE_RATIO*max(0.001, slider.value)/2, subdivision=0)
-            self._box_handle = self.viewer_control.viser_server.add_mesh_simple(
-                name=f"/hit_pos_box", 
-                vertices=box_mesh.vertices,
-                faces=box_mesh.faces,
-                position=(self.selected_location * VISER_NERFSTUDIO_SCALE_RATIO).flatten(),
-                wireframe=True
-            )
-
     def get_outputs(self, outputs: dict):
         """
         Computes the affinity between the selected 3D point and the points visible in the current rendered view.
@@ -216,8 +191,8 @@ class LERFInteraction(nn.Module):
         """
         if self.selected_location is None:
             return None
-
         location = self.selected_location
+    
         #instance_scale = self.scale_handle.value
         
         # mimic the fields call

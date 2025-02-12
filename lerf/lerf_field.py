@@ -133,6 +133,7 @@ class LERFField(Field):
         
         # Normalize CLIP embeddings 
         outputs[LERFFieldHeadNames.CLIP] = clip_pass / clip_pass.norm(dim=-1, keepdim=True)
+        #print(outputs[LERFFieldHeadNames.CLIP])
 
         # Compute Dino embeddings
         dino_pass = self.dino_net(x).view(*ray_samples.frustums.shape, -1)

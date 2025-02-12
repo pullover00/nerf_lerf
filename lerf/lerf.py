@@ -21,7 +21,6 @@ from lerf.lerf_field import LERFField
 from lerf.lerf_fieldheadnames import LERFFieldHeadNames
 from lerf.lerf_renderers import CLIPRenderer, MeanRenderer
 
-
 @dataclass
 #Adds hyperparameters specific to lerf
 class LERFModelConfig(NerfactoModelConfig):
@@ -40,7 +39,7 @@ class LERFModelConfig(NerfactoModelConfig):
 class LERFModel(NerfactoModel):
     config: LERFModelConfig
 
-     # Initialize and populate additional modules required for LERF
+    # Initialize and populate additional modules required for LERF
     def populate_modules(self):
         super().populate_modules()
 
@@ -60,13 +59,12 @@ class LERFModel(NerfactoModel):
         from lerf.interaction import LERFInteraction
         self.click_scene: LERFInteraction = LERFInteraction(
             device=("cuda" if torch.cuda.is_available() else "cpu"),
-            #scale_handle=self.scale_slider,
             model_handle=[self]
             )
         
-     # Compute the maximum relevancy across scales for each query phrase
+    # Compute the maximum relevancy across scales for each query phrase
     def get_max_across(self, ray_samples, weights, hashgrid_field, scales_shape, preset_scales=None):
-        # TODO smoothen this out
+        # Scales consider different sizes of RoI
         if preset_scales is not None:
             assert len(preset_scales) == len(self.image_encoder.positives)
             scales_list = torch.tensor(preset_scales)
@@ -104,45 +102,70 @@ class LERFModel(NerfactoModel):
 
     # Compute outputs of given ray bundle
     def get_outputs(self, ray_bundle: RayBundle):
+        """Computes the outputs for a given ray bundle, including LERF field outputs and relevancy calculations.
+
+        Args:
+            ray_bundle (RayBundle): The input rays for which the model will generate outputs.
+
+        Returns:
+            dict: A dictionary containing various outputs such as clip embeddings, dino embeddings, and relevancy scores.
+        """
+
+        # Apply camera optimization adjustments to the ray bundle if in training mode
         if self.training:
             self.camera_optimizer.apply_to_raybundle(ray_bundle)
 
-        # Sample rays and compute outputs
+        # Sample rays and compute intermediate outputs
+        # `ray_samples`: Samples along the rays for rendering
+        # `weights_list`: Stores computed weights from proposal network
+        # `ray_samples_list`: Stores ray samples at different proposal stages
         ray_samples, weights_list, ray_samples_list = self.proposal_sampler(ray_bundle, density_fns=self.density_fns)
-        ray_samples_list.append(ray_samples)
+        ray_samples_list.append(ray_samples)    # Store final ray samples in the list
 
-        # Compute  Nerfacto outputs
+        
+        # Compute standard Nerfacto field outputs
+        # `nerfacto_field_outputs`: Outputs from the Nerfacto model
+        # `outputs`: Dictionary storing different rendering outputs
+        # `weights`: Importance weights of the sampled points along the rays
         nerfacto_field_outputs, outputs, weights = self._get_outputs_nerfacto(ray_samples)
-        # Select LERF samples based on weights
+
+        # Select the most important LERF samples based on computed weights
+        # `lerf_weights`: The top `num_lerf_samples` weights per ray
+        # `best_ids`: The corresponding indices of the selected samples
         lerf_weights, best_ids = torch.topk(weights, self.config.num_lerf_samples, dim=-2, sorted=False)
 
-        # Apply best ID selection to ray samples
+        # Function to gather tensor values at selected indices
         def gather_fn(tens):
             return torch.gather(tens, -2, best_ids.expand(*best_ids.shape[:-1], tens.shape[-1]))
 
         # Apply gathering to LERF ray samples
         dataclass_fn = lambda dc: dc._apply_fn_to_fields(gather_fn, dataclass_fn)
         lerf_samples: RaySamples = ray_samples._apply_fn_to_fields(gather_fn, dataclass_fn)
+        #print(lerf_samples)
         # Can I extract these lerf samples????
 
-        # Adjust scales for training mode
+        # Get positions of lerf relevancy map:
+        outputs["positions"] = lerf_samples.frustums.get_positions()
+
+        # If in training mode, adjust scales based on ray depth and camera intrinsics
         if self.training:
             with torch.no_grad():
-                clip_scales = ray_bundle.metadata["clip_scales"]
+                clip_scales = ray_bundle.metadata["clip_scales"]    # Expand dimensions for broadcasting
                 clip_scales = clip_scales[..., None]
                 dist = (lerf_samples.frustums.get_positions() - ray_bundle.origins[:, None, :]).norm(
                     dim=-1, keepdim=True
                 )
             clip_scales = clip_scales * ray_bundle.metadata["height"] * (dist / ray_bundle.metadata["fy"])
         else:
+            # Use default scales for evaluation
             clip_scales = torch.ones_like(lerf_samples.spacing_starts, device=self.device)
 
-        # Check for scale overrides in the metadata
+        # Check if scale overrides are provided in metadata
         override_scales = (
             None if "override_scales" not in ray_bundle.metadata else ray_bundle.metadata["override_scales"]
         )
 
-        # Append weights 
+        # Store weights for use in later computations
         weights_list.append(weights)
         if self.training:
             outputs["weights_list"] = weights_list
@@ -154,7 +177,8 @@ class LERFModel(NerfactoModel):
 
         # Compute LERF field outputs including DINO and CLIP embeddings
         lerf_field_outputs = self.lerf_field.get_outputs(lerf_samples, clip_scales)
-        #print(type(lerf_field_outputs), lerf_field_outputs)
+        
+        # Render CLIP and DINO embeddings from LERF field outputs
         outputs["clip"] = self.renderer_clip(
             embeds=lerf_field_outputs[LERFFieldHeadNames.CLIP], weights=lerf_weights.detach()
         )
@@ -162,7 +186,7 @@ class LERFModel(NerfactoModel):
             embeds=lerf_field_outputs[LERFFieldHeadNames.DINO], weights=lerf_weights.detach()
         )
 
-        # If not in training, compute relevancy across scales
+        # Compute relevancy scores across different scales if not in training mode
         if not self.training:
             with torch.no_grad():
                 max_across, best_scales = self.get_max_across(
@@ -172,8 +196,8 @@ class LERFModel(NerfactoModel):
                     clip_scales.shape,
                     preset_scales=override_scales,
                 )
-                outputs["raw_relevancy"] = max_across  # N x B x 1
-                outputs["best_scales"] = best_scales.to(self.device)  # N
+                outputs["raw_relevancy"] = max_across  # Relevancy scores for each phrase
+                outputs["best_scales"] = best_scales.to(self.device)  # Best scales per phrase
 
         return outputs
 
@@ -200,6 +224,7 @@ class LERFModel(NerfactoModel):
             ray_bundle = camera_ray_bundle.get_row_major_sliced_ray_bundle(start_idx, end_idx)  # Get the sliced ray bundle
             outputs = self.forward(ray_bundle=ray_bundle)   # Perform a forward pass on the sliced ray bundle
             
+
         # Store the best scale for each query phrase across batches
             if i == 0:
                 best_scales = outputs["best_scales"]
@@ -243,14 +268,57 @@ class LERFModel(NerfactoModel):
         # Post-process the relevancy outputs for visualization    
         for i in range(len(self.image_encoder.positives)):
             p_i = torch.clip(outputs[f"relevancy_{i}"] - 0.5, 0, 1) # Normalize relevancy output to [0, 1]
-            outputs[f"composited_{i}"] = apply_colormap(p_i / (p_i.max() + 1e-6), ColormapOptions("turbo")) # Apply a colormap to the normalized relevancy
-            #mask = (outputs["relevancy_0"] < 0.5).squeeze() # Create a mask for areas with low relevancy (less than 0.5)
-            #outputs[f"composited_{i}"][mask, :] = outputs["rgb"][mask, :] # Replace low relevancy areas with the original RGB image
-            mask = (outputs["relevancy_0"] < 0.8).squeeze() # Create a mask for areas with high relevancy (less than 0.5)
+          
+            # Apply colormap to the normalized relevancy
+            outputs[f"composited_{i}"] = apply_colormap(p_i / (p_i.max() + 1e-6), ColormapOptions("turbo"))
+    
+            # Create a mask for areas with high relevancy (less than 0.8)
+            mask = (outputs["relevancy_0"] < 0.8).squeeze() 
+           
+           # Replace low relevancy areas with the original RGB image
             outputs[f"composited_{i}"][mask, :] = outputs["rgb"][mask, :] # Replace low relevancy areas with the original RGB image
 
+            # Get the entry in outputs with the highest relevancy
+            max_relevancy_value = torch.max(outputs["relevancy_0"])  # Find the maximum relevancy value
+            max_relevancy_index = torch.argmax(outputs["relevancy_0"])  # Find the index in outputs of the maximum value
+
+            # Get the shape of lerf_samples positions
+            num_rays, num_samples_per_ray, _ = outputs["relevancy_0"].shape  # [N_rays, N_samples, 3]
+
+            # Extract relevancy scores
+            relevancy = outputs["relevancy_0"]  # Shape: [num_rays, num_samples_per_ray, 1] OR [num_rays, num_samples_per_ray]
+            print(f"Relevancy shape: {relevancy.shape}")  # Debugging print
+
+            # Remove any extra dimension (e.g., [num_rays, num_samples_per_ray, 1] -> [num_rays, num_samples_per_ray])
+            relevancy = relevancy.squeeze(-1)  
+
+            # Get the max relevancy value and its index
+            max_relevancy_value = torch.max(relevancy)
+            max_flattened_index = torch.argmax(relevancy)
+
+            # Convert 1D index to 2D (ray index, sample index)
+            num_rays, num_samples_per_ray = relevancy.shape
+            ray_idx, sample_idx = divmod(max_flattened_index.item(), num_samples_per_ray)
+
+            # Ensure positions_xyz is extracted correctly
+            positions_xyz = outputs["positions"]  # Should be [num_rays, num_samples_per_ray, 3]
+
+            # Ensure positions_xyz has the expected shape
+            print(f"positions_xyz shape: {positions_xyz.shape}")  # Debugging output
+
+            # Extract the highest relevancy position
+            highest_relevancy_position = positions_xyz[ray_idx, sample_idx, :3]  # Ensure we only get [x, y, z]
+
+            # Print the final result
+            print(f"Max relevancy value: {max_relevancy_value.item()}")
+            print(f"Highest relevancy position (XYZ): {highest_relevancy_position.tolist()}")
+
+            # Store in outputs
+            outputs["max_relevancy_value"] = max_relevancy_value
+            outputs["highest_relevancy_position"] = highest_relevancy_position
+
         return outputs
-    
+
         # # # Function to get relevan outputs out of NERF # # # 
 
         # Iterate through positive image_encoders:
